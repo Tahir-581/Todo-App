@@ -1,0 +1,8 @@
+{
+  "crons": [
+    {
+      "path": "/api/cron/progress-tracker/daily-report",
+      "schedule": "* * * * *"
+    }
+  ]
+}

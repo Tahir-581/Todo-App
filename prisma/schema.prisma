@@ -1,0 +1,288 @@
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+enum TaskStatus {
+  TODO
+  IN_PROGRESS
+  IN_REVIEW
+  TODAY_DONE
+  DONE
+  CANCELLED
+}
+
+enum TaskPriority {
+  NONE
+  LOW
+  MEDIUM
+  HIGH
+  URGENT
+}
+
+enum TaskRecurrence {
+  NONE
+  DAILY
+  WEEKLY
+  MONTHLY
+}
+
+enum DailyEmailReportKind {
+  PROGRESS_TRACKER
+  ALL_TASKS
+  ALL_REPORTS
+}
+
+/** Idea Parking Lot — pre-prioritized capture. */
+enum IdeaStatus {
+  PARKED
+  PRIORITY
+  IN_PROGRESS
+  COMPLETED
+  ARCHIVED
+}
+
+model User {
+  id                 String         @id @default(cuid())
+  name               String?
+  email              String         @unique
+  password           String
+  avatar             String?
+  emailNotifications Boolean        @default(true)
+  /** When set, task completion can notify this number via Selenium bot (project-root whatsapp_bot.py or WHATSAPP_BOT_SCRIPT). */
+  whatsappPhone      String?
+  whatsappNotifications Boolean     @default(false)
+  dailyProgressEmail Boolean        @default(false)
+  /** Same schedule/report kind as daily email; sends plain-text summary via WhatsApp bot when on. */
+  dailyProgressWhatsApp Boolean      @default(false)
+  /** True when at least one progress activity has `whatsappReminderEnabled` (updated on tracker sync). */
+  hasProgressActivityWaReminders Boolean @default(false)
+  /** Local send times (minutes since midnight). Multiple = multiple digests per day. */
+  dailyReportSendMinutes Int[]      @default([540])
+  /** Which daily email to send (when dailyProgressEmail is on). */
+  dailyEmailReportKind DailyEmailReportKind @default(PROGRESS_TRACKER)
+  /** Browser timezone offset (minutes) for scheduling when progress tracker is not synced. */
+  reportTzOffsetMinutes Int         @default(0)
+  /** IANA timezone from the browser (e.g. Asia/Karachi) for correct email timestamps. */
+  reportTimeZone     String?
+  theme              String         @default("dark")
+  resetToken         String?
+  resetTokenExpiry   DateTime?
+  createdAt          DateTime       @default(now())
+  projects           Project[]
+  tasks              Task[]
+  labels             Label[]
+  comments           Comment[]
+  activities         TaskActivity[]
+  progressTrackerState UserProgressTrackerState?
+  notificationRecipients NotificationRecipient[]
+  whatsappReportRecipients WhatsAppReportRecipient[]
+  progressDailyReportLogs ProgressDailyReportLog[]
+  progressDailyReportWhatsAppLogs ProgressDailyReportWhatsAppLog[]
+  progressActivityReminderWhatsAppLogs ProgressActivityReminderWhatsAppLog[]
+  ideas                              Idea[]
+}
+
+model UserProgressTrackerState {
+  userId           String   @id
+  user             User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  activitiesJson   String   @default("[]")
+  checksJson       String   @default("{}")
+  tzOffsetMinutes  Int      @default(0)
+  updatedAt        DateTime @updatedAt
+}
+
+model NotificationRecipient {
+  id        String   @id @default(cuid())
+  userId    String
+  user      User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  email     String
+  createdAt DateTime @default(now())
+
+  @@unique([userId, email])
+}
+
+/** Extra E.164 numbers that receive the daily WhatsApp report (in addition to `User.whatsappPhone` when set). */
+model WhatsAppReportRecipient {
+  id        String   @id @default(cuid())
+  userId    String
+  user      User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  phone     String
+  createdAt DateTime @default(now())
+
+  @@unique([userId, phone])
+}
+
+model ProgressDailyReportLog {
+  id      String   @id @default(cuid())
+  userId  String
+  user    User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  /** yyyy-MM-dd report content date (typically "yesterday" in local tz) */
+  dateStr String
+  /** Which schedule slot (minutes since midnight) produced this send */
+  slotMinutes Int @default(0)
+  sentAt  DateTime @default(now())
+
+  @@unique([userId, dateStr, slotMinutes])
+}
+
+model ProgressDailyReportWhatsAppLog {
+  id      String   @id @default(cuid())
+  userId  String
+  user    User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  /** Local calendar day when this send was delivered */
+  dateStr String
+  slotMinutes Int @default(0)
+  sentAt  DateTime @default(now())
+
+  @@unique([userId, dateStr, slotMinutes])
+}
+
+/** One send per user + activity + local calendar day (progress tracker WhatsApp nudge). */
+model ProgressActivityReminderWhatsAppLog {
+  id         String   @id @default(cuid())
+  userId     String
+  user       User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  activityId String
+  /** yyyy-MM-dd in the user's report timezone ("today" when the reminder was sent). */
+  dateStr    String
+  sentAt     DateTime @default(now())
+
+  @@unique([userId, activityId, dateStr])
+  @@index([userId, dateStr])
+}
+
+model Project {
+  id        String   @id @default(cuid())
+  name      String
+  color     String   @default("#6366F1")
+  emoji     String   @default("📋")
+  userId    String
+  user      User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  tasks     Task[]
+  createdAt DateTime @default(now())
+}
+
+model Task {
+  id                   String        @id @default(cuid())
+  taskRef              Int
+  title                String
+  description          String        @default("")
+  status               TaskStatus    @default(TODO)
+  priority             TaskPriority  @default(NONE)
+  deadline             DateTime?
+  deadlineRecurrence   TaskRecurrence @default(NONE)
+  reminderAt           DateTime?
+  reminderRecurrence   TaskRecurrence @default(NONE)
+  reminderSound        Boolean       @default(true)
+  reminderSnoozedUntil DateTime?
+  projectId            String
+  project              Project       @relation(fields: [projectId], references: [id], onDelete: Cascade)
+  userId               String
+  user                 User          @relation(fields: [userId], references: [id], onDelete: Cascade)
+  completedAt          DateTime?
+  deadlineReminderSentAt DateTime?
+  createdAt            DateTime      @default(now())
+  updatedAt            DateTime      @updatedAt
+  labels               TaskLabel[]
+  subtasks             Subtask[]
+  comments             Comment[]
+  attachments          Attachment[]
+  activities           TaskActivity[]
+
+  @@unique([userId, taskRef])
+}
+
+model Label {
+  id     String      @id @default(cuid())
+  name   String
+  color  String      @default("#6366F1")
+  userId String
+  user   User        @relation(fields: [userId], references: [id], onDelete: Cascade)
+  tasks  TaskLabel[]
+
+  @@unique([userId, name])
+}
+
+model TaskLabel {
+  taskId  String
+  labelId String
+  task    Task   @relation(fields: [taskId], references: [id], onDelete: Cascade)
+  label   Label  @relation(fields: [labelId], references: [id], onDelete: Cascade)
+
+  @@id([taskId, labelId])
+}
+
+model Subtask {
+  id        String  @id @default(cuid())
+  title     String
+  completed Boolean @default(false)
+  order     Int     @default(0)
+  taskId    String
+  task      Task    @relation(fields: [taskId], references: [id], onDelete: Cascade)
+}
+
+model Comment {
+  id        String   @id @default(cuid())
+  content   String
+  taskId    String
+  task      Task     @relation(fields: [taskId], references: [id], onDelete: Cascade)
+  userId    String
+  user      User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  createdAt DateTime @default(now())
+}
+
+model Attachment {
+  id        String   @id @default(cuid())
+  name      String
+  url       String
+  taskId    String
+  task      Task     @relation(fields: [taskId], references: [id], onDelete: Cascade)
+  createdAt DateTime @default(now())
+}
+
+model TaskActivity {
+  id        String   @id @default(cuid())
+  taskId    String
+  task      Task     @relation(fields: [taskId], references: [id], onDelete: Cascade)
+  userId    String
+  user      User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  action    String
+  oldValue  String?
+  newValue  String?
+  createdAt DateTime @default(now())
+}
+
+model Idea {
+  id          String     @id @default(cuid())
+  title       String
+  description String     @default("")
+  tags        String[]   @default([])
+  status      IdeaStatus @default(PARKED)
+  votes       Int        @default(0)
+  /** Sort order within a status column (Kanban). */
+  columnOrder Int        @default(0)
+  userId      String
+  user        User       @relation(fields: [userId], references: [id], onDelete: Cascade)
+  activities  IdeaActivity[]
+  createdAt   DateTime   @default(now())
+  updatedAt   DateTime   @updatedAt
+
+  @@index([userId, status])
+  @@index([userId, createdAt])
+}
+
+model IdeaActivity {
+  id        String   @id @default(cuid())
+  ideaId    String
+  idea      Idea     @relation(fields: [ideaId], references: [id], onDelete: Cascade)
+  action    String
+  detail    String?
+  createdAt DateTime @default(now())
+
+  @@index([ideaId, createdAt])
+}
